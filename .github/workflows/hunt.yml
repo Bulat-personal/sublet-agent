@@ -1,0 +1,58 @@
+name: sublet-hunt
+
+on:
+  schedule:
+    # Every 15 minutes. GitHub may delay by up to ~10 min under load — that's fine.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:    # allow manual triggers from the Actions tab
+
+# Allow the job to push state.db back to the repo
+permissions:
+  contents: write
+
+# If a run is still going when the next one starts, queue the new one
+# (otherwise dedup state could diverge).
+concurrency:
+  group: sublet-hunt
+  cancel-in-progress: false
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Uncomment when enabling Phase 2 sources (Ohana, LeaseBreak)
+      # - name: Install Playwright + Chromium
+      #   run: python -m playwright install --with-deps chromium
+
+      - name: Run sublet hunt
+        env:
+          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
+          RESEND_API_KEY:       ${{ secrets.RESEND_API_KEY }}
+          TARGET_EMAIL:         ${{ secrets.TARGET_EMAIL }}
+        run: python main.py
+
+      - name: Commit state.db
+        run: |
+          git config user.name  "sublet-agent-bot"
+          git config user.email "bot@users.noreply.github.com"
+          if [ -f state.db ]; then
+            git add state.db
+            if ! git diff --cached --quiet; then
+              git commit -m "state: $(date -u +%FT%TZ)"
+              git push
+            else
+              echo "No state changes to commit"
+            fi
+          fi

@@ -1,0 +1,7 @@
+requests==2.32.3
+beautifulsoup4==4.12.3
+feedparser==6.0.11
+pytz==2024.1
+python-dotenv==1.0.1
+# Phase 2 (Ohana, LeaseBreak) — comment out if not yet using:
+playwright==1.47.0
