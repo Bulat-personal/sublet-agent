@@ -24,6 +24,7 @@ class Listing:
     body_snippet: str = ""                    # first ~300 chars
     posted_at: Optional[str] = None
     tags: list[str] = field(default_factory=list)
+    region: Optional[str] = None              # routing key, set by filter.py (e.g. "manhattan")
 
     def to_dict(self) -> dict:
         return asdict(self)

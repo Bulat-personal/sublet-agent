@@ -37,10 +37,15 @@ jobs:
 
       - name: Run sublet hunt
         env:
-          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:     ${{ secrets.TELEGRAM_CHAT_ID }}
-          RESEND_API_KEY:       ${{ secrets.RESEND_API_KEY }}
-          TARGET_EMAIL:         ${{ secrets.TARGET_EMAIL }}
+          TELEGRAM_BOT_TOKEN:           ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:             ${{ secrets.TELEGRAM_CHAT_ID }}              # global fallback
+          TELEGRAM_CHAT_ID_MANHATTAN:   ${{ secrets.TELEGRAM_CHAT_ID_MANHATTAN }}
+          TELEGRAM_CHAT_ID_NORTH_BK:    ${{ secrets.TELEGRAM_CHAT_ID_NORTH_BK }}
+          TELEGRAM_CHAT_ID_SOUTH_BK:    ${{ secrets.TELEGRAM_CHAT_ID_SOUTH_BK }}
+          TELEGRAM_CHAT_ID_QUEENS:      ${{ secrets.TELEGRAM_CHAT_ID_QUEENS }}
+          TELEGRAM_CHAT_ID_NJ:          ${{ secrets.TELEGRAM_CHAT_ID_NJ }}
+          RESEND_API_KEY:               ${{ secrets.RESEND_API_KEY }}
+          TARGET_EMAIL:                 ${{ secrets.TARGET_EMAIL }}
         run: python main.py
 
       - name: Commit state.db

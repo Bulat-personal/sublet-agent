@@ -3,10 +3,15 @@ Notification dispatch.
 
 Primary:   Telegram bot — instant, free, rich previews.
 Fallback:  Resend email — used if Telegram isn't configured or fails.
+
+Routing: each region (Manhattan, North Brooklyn, South Brooklyn, Queens, NJ)
+goes to its own Telegram channel. If a region's chat_id isn't set,
+its listings fall back to the global TELEGRAM_CHAT_ID.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 import logging
 from html import escape as html_escape
@@ -79,16 +84,16 @@ def _format_listing(l: Listing) -> str:
 
 # ─── Telegram ────────────────────────────────────────────────────────────────
 
-def _send_telegram(text: str) -> bool:
-    """Send a single Telegram message. Returns True on success."""
-    if not (config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID):
-        logger.warning("Telegram not configured (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID missing)")
+def _send_telegram(chat_id: str, text: str) -> bool:
+    """Send a single Telegram message to a specific chat_id. Returns True on success."""
+    if not (config.TELEGRAM_BOT_TOKEN and chat_id):
+        logger.warning("Telegram not configured (missing bot token or chat_id)")
         return False
 
     url = TELEGRAM_API.format(token=config.TELEGRAM_BOT_TOKEN, method="sendMessage")
     try:
         resp = requests.post(url, json={
-            "chat_id": config.TELEGRAM_CHAT_ID,
+            "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": False,
@@ -118,11 +123,12 @@ def _chunk_listings(listings: list[Listing]) -> list[str]:
     return chunks
 
 
-def send_telegram_digest(listings: list[Listing]) -> bool:
-    """Send N listings via Telegram, chunked. Returns True if any send succeeded."""
+def _send_region_digest(chat_id: str, region_label: str, region_emoji: str, listings: list[Listing]) -> bool:
+    """Send N listings via Telegram to a specific region's chat, chunked."""
     if not listings:
         return False
-    header = f"🏠 <b>{len(listings)} new NYC sublet{'s' if len(listings)!=1 else ''}</b>\n\n"
+    n = len(listings)
+    header = f"{region_emoji} <b>{n} new {region_label} sublet{'s' if n != 1 else ''}</b>\n\n"
     chunks = _chunk_listings(listings)
     if not chunks:
         return False
@@ -130,10 +136,53 @@ def send_telegram_digest(listings: list[Listing]) -> bool:
 
     all_ok = True
     for i, chunk in enumerate(chunks, start=1):
-        ok = _send_telegram(chunk)
+        ok = _send_telegram(chat_id, chunk)
         all_ok = all_ok and ok
         if len(chunks) > 1:
-            logger.info(f"Telegram: sent chunk {i}/{len(chunks)} ({'ok' if ok else 'FAIL'})")
+            logger.info(f"Telegram[{region_label}]: chunk {i}/{len(chunks)} ({'ok' if ok else 'FAIL'})")
+    return all_ok
+
+
+def _resolve_chat_id(region_key: str | None) -> tuple[str, str, str]:
+    """
+    Return (chat_id, label, emoji) for a region.
+    Falls back to global TELEGRAM_CHAT_ID if the region-specific env var is unset.
+    """
+    if region_key and region_key in config.REGIONS:
+        region = config.REGIONS[region_key]
+        chat_id = os.environ.get(region["chat_id_env"], "")
+        if chat_id:
+            return chat_id, region["label"], region["emoji"]
+        # Fall through to global if region-specific not set
+        return config.TELEGRAM_CHAT_ID, region["label"], region["emoji"]
+    # Unknown / no region — use global with neutral label
+    return config.TELEGRAM_CHAT_ID, "NYC", "🏙️"
+
+
+def send_telegram_routed(listings: list[Listing]) -> bool:
+    """
+    Route listings to per-region Telegram chats.
+    Returns True if every region we tried to message succeeded.
+    """
+    if not listings:
+        return False
+
+    # Bucket by region
+    by_region: dict[str | None, list[Listing]] = {}
+    for l in listings:
+        by_region.setdefault(l.region, []).append(l)
+
+    all_ok = True
+    for region_key, region_listings in by_region.items():
+        chat_id, label, emoji = _resolve_chat_id(region_key)
+        if not chat_id:
+            logger.warning(f"No chat_id for region '{region_key}' — skipping {len(region_listings)} listings")
+            all_ok = False
+            continue
+        ok = _send_region_digest(chat_id, label, emoji, region_listings)
+        logger.info(f"[{label}] sent {len(region_listings)} listings → {'ok' if ok else 'FAIL'}")
+        all_ok = all_ok and ok
+
     return all_ok
 
 
@@ -204,7 +253,7 @@ def notify(listings: list[Listing]) -> bool:
         logger.info("notify: no listings to send")
         return False
 
-    tg_ok = send_telegram_digest(listings)
+    tg_ok = send_telegram_routed(listings)
     if tg_ok:
         return True
 
@@ -215,9 +264,13 @@ def notify(listings: list[Listing]) -> bool:
 # ─── CLI helpers ─────────────────────────────────────────────────────────────
 
 def _print_chat_id_helper():
-    """Walk the user through finding their Telegram chat_id by calling getUpdates."""
+    """Walk the user through finding their Telegram chat_id(s) by calling getUpdates.
+
+    Works for direct messages, group chats, AND channels (as long as the bot
+    is admin in the channel and at least one message has been posted there).
+    """
     if not config.TELEGRAM_BOT_TOKEN:
-        print("Set TELEGRAM_BOT_TOKEN in .env first, then DM your bot anything.")
+        print("Set TELEGRAM_BOT_TOKEN in .env first, then post a message in each channel/group/DM.")
         sys.exit(1)
     url = TELEGRAM_API.format(token=config.TELEGRAM_BOT_TOKEN, method="getUpdates")
     resp = requests.get(url, timeout=10)
@@ -227,37 +280,60 @@ def _print_chat_id_helper():
         sys.exit(1)
     updates = data.get("result", [])
     if not updates:
-        print("No updates yet. DM your bot anything in Telegram, then re-run this.")
+        print("No updates yet. Post a message in each Telegram chat/channel where the bot is, then re-run this.")
         sys.exit(0)
-    seen = set()
+    seen = {}
     for u in updates:
-        msg = u.get("message") or u.get("channel_post") or {}
+        msg = (u.get("message") or u.get("channel_post")
+               or u.get("edited_message") or u.get("edited_channel_post") or {})
         chat = msg.get("chat", {})
         cid = chat.get("id")
-        if cid and cid not in seen:
-            seen.add(cid)
-            who = chat.get("username") or chat.get("first_name") or "?"
-            print(f"chat_id={cid}  (chat with: {who})")
-    print("\n→ Copy the chat_id you want and put it in .env as TELEGRAM_CHAT_ID")
+        if cid is None or cid in seen:
+            continue
+        title = chat.get("title") or chat.get("username") or chat.get("first_name") or "?"
+        ctype = chat.get("type", "?")
+        seen[cid] = (title, ctype)
+    if not seen:
+        print("No usable chats found. Make sure your bot is admin in the channels and has been messaged.")
+        sys.exit(0)
+    print("Found these chats:")
+    for cid, (title, ctype) in seen.items():
+        print(f"  chat_id={cid}  type={ctype}  name={title!r}")
+    print("\n→ For each channel, copy its chat_id into the matching GitHub Secret:")
+    print("    TELEGRAM_CHAT_ID_MANHATTAN")
+    print("    TELEGRAM_CHAT_ID_NORTH_BK")
+    print("    TELEGRAM_CHAT_ID_SOUTH_BK")
+    print("    TELEGRAM_CHAT_ID_QUEENS")
+    print("    TELEGRAM_CHAT_ID_NJ")
 
 
 def _send_test():
-    """Send a hardcoded test message."""
-    sample = [Listing(
-        id="test_1",
-        source="craigslist_nyc",
-        url="https://newyork.craigslist.org/test",
-        title="TEST: $2,200 sublet in Williamsburg, 3 months, furnished",
-        price=2200,
-        neighborhood="Williamsburg",
-        duration_months=3,
-        move_in_date="2026-06-15",
-        furnished=True,
-        bedrooms=1,
-        body_snippet="This is a test notification from sublet-agent.",
-    )]
-    ok = notify(sample)
-    print("✅ Sent" if ok else "❌ Failed — check logs above")
+    """Send a hardcoded test message to each configured region."""
+    samples = [
+        Listing(id="test_m", source="craigslist_nyc",
+                url="https://example.com/m", title="TEST Manhattan: $2,200 sublet in East Village",
+                price=2200, neighborhood="East Village", duration_months=3,
+                move_in_date="2026-06-15", furnished=True, bedrooms=1,
+                body_snippet="Test notification — Manhattan channel.", region="manhattan"),
+        Listing(id="test_nbk", source="craigslist_nyc",
+                url="https://example.com/nbk", title="TEST North BK: $1,900 room in Williamsburg",
+                price=1900, neighborhood="Williamsburg", region="north_brooklyn",
+                body_snippet="Test notification — North Brooklyn channel."),
+        Listing(id="test_sbk", source="craigslist_nyc",
+                url="https://example.com/sbk", title="TEST South BK: $2,400 sublet in Park Slope",
+                price=2400, neighborhood="Park Slope", region="south_brooklyn",
+                body_snippet="Test notification — South Brooklyn channel."),
+        Listing(id="test_q", source="craigslist_nyc",
+                url="https://example.com/q", title="TEST Queens: $1,800 in Astoria",
+                price=1800, neighborhood="Astoria", region="queens",
+                body_snippet="Test notification — Queens channel."),
+        Listing(id="test_nj", source="craigslist_nj",
+                url="https://example.com/nj", title="TEST NJ: $1,700 in Jersey City",
+                price=1700, neighborhood="Jersey City", region="new_jersey",
+                body_snippet="Test notification — NJ channel."),
+    ]
+    ok = notify(samples)
+    print("✅ Sent" if ok else "❌ Some sends failed — check logs above")
 
 
 if __name__ == "__main__":
@@ -268,5 +344,5 @@ if __name__ == "__main__":
         _send_test()
     else:
         print("Usage:")
-        print("  python -m notifier --get-chat-id   # find your Telegram chat_id")
-        print("  python -m notifier --test          # send a test notification")
+        print("  python -m notifier --get-chat-id   # find all your Telegram chat_ids at once")
+        print("  python -m notifier --test          # send a test message to each region")
