@@ -42,6 +42,16 @@ def _matches_neighborhood(text: str) -> str | None:
     return None
 
 
+def _assign_region(text: str) -> tuple[str | None, str | None]:
+    """Return (region_key, matched_neighborhood) for the first region whose neighborhood appears in text."""
+    text_low = text.lower()
+    for region_key, region in config.REGIONS.items():
+        for hood in region["neighborhoods"]:
+            if hood in text_low:
+                return region_key, hood
+    return None, None
+
+
 def _is_scam(listing: Listing) -> bool:
     """Heuristic scam detection."""
     text = (listing.title + " " + listing.body_snippet)
@@ -91,14 +101,15 @@ def filter_listings(listings: list[Listing]) -> list[Listing]:
             rejected["over_budget"] += 1
             continue
 
-        # HARD: not in target neighborhoods
+        # HARD: not in target neighborhoods + assign region for routing
         full_text = " ".join(filter(None, [l.title, l.body_snippet, l.neighborhood or ""]))
-        hood = _matches_neighborhood(full_text)
+        region_key, hood = _assign_region(full_text)
         if hood is None:
             rejected["wrong_area"] += 1
             continue
         if not l.neighborhood:
             l.neighborhood = hood.title()
+        l.region = region_key
 
         # SCAM
         if _is_scam(l):

@@ -18,21 +18,59 @@ REQUIRE_FURNISHED = False        # flag, not filter (still get unfurnished listi
 EARLIEST_MOVE_IN = "2026-06-01"  # ISO date; flag listings starting before
 LATEST_MOVE_IN   = "2026-09-30"  # ISO date; flag listings starting after
 
-# ─── Neighborhoods (carried over from rental-agent) ───────────────────────────
 
+# ─── Regions ──────────────────────────────────────────────────────────────────
+#
+# Each region is one Telegram channel. Listings are routed to the channel of
+# the first matching neighborhood. If a region's chat_id env var is missing,
+# its listings fall back to TELEGRAM_CHAT_ID.
+
+REGIONS = {
+    "manhattan": {
+        "label": "Manhattan",
+        "emoji": "🟦",
+        "chat_id_env": "TELEGRAM_CHAT_ID_MANHATTAN",
+        "neighborhoods": [
+            "soho", "tribeca", "financial district", "fidi", "battery park",
+            "lower east side", "les", "east village", "west village",
+            "greenwich village", "nolita", "noho", "chinatown", "two bridges",
+            "seaport", "chelsea", "flatiron", "gramercy", "kips bay",
+        ],
+    },
+    "north_brooklyn": {
+        "label": "North Brooklyn",
+        "emoji": "🟩",
+        "chat_id_env": "TELEGRAM_CHAT_ID_NORTH_BK",
+        "neighborhoods": ["williamsburg", "greenpoint", "bushwick"],
+    },
+    "south_brooklyn": {
+        "label": "South Brooklyn",
+        "emoji": "🟪",
+        "chat_id_env": "TELEGRAM_CHAT_ID_SOUTH_BK",
+        "neighborhoods": [
+            "downtown brooklyn", "dumbo", "boerum hill",
+            "cobble hill", "carroll gardens", "park slope", "gowanus",
+        ],
+    },
+    "queens": {
+        "label": "Queens",
+        "emoji": "🟧",
+        "chat_id_env": "TELEGRAM_CHAT_ID_QUEENS",
+        "neighborhoods": ["astoria", "long island city", "lic", "sunnyside"],
+    },
+    "new_jersey": {
+        "label": "New Jersey",
+        "emoji": "🟫",
+        "chat_id_env": "TELEGRAM_CHAT_ID_NJ",
+        "neighborhoods": ["jersey city", "hoboken", "journal square", "newport"],
+    },
+}
+
+# Derived: flat list of all neighborhood keywords (used by filter + scrapers)
 NEIGHBORHOOD_KEYWORDS = [
-    # Manhattan below 23rd St
-    "soho", "tribeca", "financial district", "fidi", "battery park",
-    "lower east side", "les", "east village", "west village",
-    "greenwich village", "nolita", "noho", "chinatown", "two bridges",
-    "seaport", "chelsea", "flatiron", "gramercy", "kips bay",
-    # Brooklyn
-    "williamsburg", "greenpoint", "bushwick",
-    "downtown brooklyn", "dumbo", "boerum hill",
-    "cobble hill", "carroll gardens", "park slope", "gowanus",
-    # NJ
-    "jersey city", "hoboken", "journal square", "newport",
+    hood for region in REGIONS.values() for hood in region["neighborhoods"]
 ]
+
 
 # ─── Craigslist search groups (sublets/rooms categories only) ─────────────────
 
@@ -44,6 +82,7 @@ CL_SEARCH_GROUPS = {
         "bushwick",
         "downtown brooklyn carroll gardens",
         "park slope cobble hill",
+        "astoria long island city",   # Queens
     ],
     "nj": [
         "jersey city hoboken",
@@ -66,6 +105,8 @@ MEDIANS = {
     "tribeca":           {"studio": 3800, "1br": 5000, "2br": 7000},
     "chelsea":           {"studio": 3000, "1br": 3800, "2br": 5200},
     "lower east side":   {"studio": 2700, "1br": 3200, "2br": 4500},
+    "astoria":           {"studio": 2200, "1br": 2700, "2br": 3500},
+    "long island city":  {"studio": 2800, "1br": 3400, "2br": 4600},
     "jersey city":       {"studio": 2200, "1br": 2800, "2br": 3600},
     "hoboken":           {"studio": 2400, "1br": 3000, "2br": 4000},
 }
@@ -109,7 +150,9 @@ SOURCE_CADENCE_MINUTES = {
 # ─── Secrets (env vars only — never hardcode) ─────────────────────────────────
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")    # global fallback
+
+# Per-region chat IDs are read lazily in notifier.py via REGIONS[key]["chat_id_env"]
 
 # Reddit uses public RSS feeds — no credentials needed.
 
